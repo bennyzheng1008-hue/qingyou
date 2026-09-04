@@ -106,6 +106,12 @@ class ReplyEngine:
     def build_messages(self, name: str, incoming: str, image_path: str = None) -> list:
         cats = list(self.stickers.categories().keys()) if \
             self.config.get("stickers", "enabled", default=True) else []
+        favorite_cfg = self.config.get("wechat_favorites", default={}) or {}
+        if self.config.get("stickers", "enabled", default=True) and \
+                favorite_cfg.get("enabled", True):
+            favorite_cats = list((favorite_cfg.get("categories") or {}).keys())
+            cats.extend(favorite_cats or ["微信收藏"])
+        cats = list(dict.fromkeys(cats))
         learned_style = self.style_learner.summary(
             name,
             self.config.get("style_learning", "min_samples", default=3),

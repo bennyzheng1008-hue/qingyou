@@ -2,6 +2,7 @@
 config.json
 history.json
 style_profiles.json
+data/wechat_favorites/
 .env
 .env.*
 

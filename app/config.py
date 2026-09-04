@@ -58,6 +58,11 @@ DEFAULTS = {
         "dir": "assets/stickers",
         "ocr_enabled": True,
     },
+    "wechat_favorites": {
+        "enabled": True,
+        "last_count": 0,
+        "categories": {},
+    },
     # 各类消息的处理策略：auto=大模型自动回复，manual=进入手动回复队列
     "policy": {
         "text": "auto",

@@ -13,6 +13,7 @@ from .bot import HAS_WXAUTO4, WeChatBot
 from .config import MAX_MONITORED_CONTACTS, app_dir
 from .llm import PRESETS
 from .reply_engine import ReplyEngine
+from .wechat_favorites import format_category_mapping, parse_category_mapping
 
 FONT = ("Microsoft YaHei UI", 10)
 FONT_S = ("Microsoft YaHei UI", 9)
@@ -132,6 +133,7 @@ class App(tk.Tk):
         self._mon_names = []
 
         self.title("轻友")
+        self._set_app_icon()
         self.geometry("1040x820")
         self.minsize(940, 720)
         self.configure(background=BG)
@@ -207,6 +209,23 @@ class App(tk.Tk):
         self.after(150, self._pump)
 
     # ================= 样式 =================
+    def _set_app_icon(self):
+        """让窗口、任务栏和快捷方式使用统一的轻友品牌图标。"""
+        branding = os.path.join(app_dir(), "assets", "branding")
+        ico_path = os.path.join(branding, "qingyou.ico")
+        png_path = os.path.join(branding, "qingyou-icon.png")
+        try:
+            if os.path.exists(ico_path):
+                self.iconbitmap(ico_path)
+        except Exception:
+            pass
+        try:
+            if os.path.exists(png_path):
+                self._app_icon_image = tk.PhotoImage(file=png_path)
+                self.iconphoto(True, self._app_icon_image)
+        except Exception:
+            pass
+
     def _init_style(self):
         self.option_add("*Font", FONT)
         self.option_add("*Background", BG)
@@ -571,14 +590,63 @@ class App(tk.Tk):
         self._button(s1, text="打开表情包目录",
                      command=lambda: self._open_sticker_dir(), variant="quiet",
                      width=130).pack(side="right")
-        ttk.Label(lf4, text="收到表情包时会先 OCR 画面文字：有字按文字理解，无字按图片和情绪理解。"
-                            "你发送的表情包仍按 assets/stickers 下的分类选择。",
+        s2 = ttk.Frame(lf4); s2.pack(fill="x", pady=(5, 2))
+        self.var_wechat_favorites = tk.BooleanVar(value=True)
+        ttk.Checkbutton(s2, text="优先使用微信收藏表情",
+                        variable=self.var_wechat_favorites).pack(side="left")
+        ttk.Label(s2, text="分类索引:").pack(side="left", padx=(16, 4))
+        self.var_wechat_categories = tk.StringVar()
+        ttk.Entry(s2, textvariable=self.var_wechat_categories).pack(
+            side="left", fill="x", expand=True)
+        self.btn_sync_favorites = self._button(
+            s2, text="同步收藏", command=self._sync_favorites,
+            variant="soft", width=104, height=32)
+        self.btn_sync_favorites.pack(side="right", padx=(8, 0))
+        self._button(s2, text="查看索引", command=self._open_favorite_cache,
+                     variant="quiet", width=96, height=32).pack(side="right", padx=(8, 0))
+        ttk.Label(lf4, text="先连接微信再同步；会在本机建立索引。可写“开心:0,1；无语:2-4”细分语气。"
+                            "收到的表情有字按文字理解，无字按图片理解。",
                   font=FONT_S, foreground="#777").pack(fill="x")
 
     def _open_sticker_dir(self):
         d = os.path.join(app_dir(), "assets", "stickers")
         os.makedirs(d, exist_ok=True)
         os.startfile(d)
+
+    def _open_favorite_cache(self):
+        d = os.path.join(app_dir(), "data", "wechat_favorites")
+        os.makedirs(d, exist_ok=True)
+        os.startfile(d)
+
+    def _sync_favorites(self):
+        if not self.bot:
+            messagebox.showinfo("请先连接", "请先点击顶部的「连接微信」")
+            return
+        self._apply_settings()
+        self.btn_sync_favorites.config(state="disabled", text="同步中…")
+
+        def work():
+            try:
+                report = self.bot.sync_favorite_stickers()
+                count = int(report.get("count") or 0)
+                captured = int(report.get("captured") or 0)
+                mapping = self.config_obj.get(
+                    "wechat_favorites", "categories", default={}) or {}
+
+                def done():
+                    self.var_wechat_categories.set(format_category_mapping(mapping))
+                    self.btn_sync_favorites.config(state="normal", text="同步收藏")
+                    messagebox.showinfo(
+                        "同步完成",
+                        f"已识别 {count} 个微信收藏表情，"
+                        f"并保存 {captured} 张本地预览。")
+                self.after(0, done)
+            except Exception as e:
+                error = str(e)
+                self.after(0, lambda err=error: (
+                    self.btn_sync_favorites.config(state="normal", text="同步收藏"),
+                    messagebox.showerror("同步失败", err)))
+        threading.Thread(target=work, daemon=True).start()
 
     # ================= 页签4：运行监控 =================
     def _build_tab_run(self):
@@ -765,6 +833,10 @@ class App(tk.Tk):
 
         cfg.set(bool(self.var_stk.get()), "stickers", "enabled")
         cfg.set(bool(self.var_sticker_ocr.get()), "stickers", "ocr_enabled")
+        cfg.set(bool(self.var_wechat_favorites.get()),
+                "wechat_favorites", "enabled")
+        cfg.set(parse_category_mapping(self.var_wechat_categories.get()),
+                "wechat_favorites", "categories")
         for key, var in self.policy_vars.items():
             cfg.set("auto" if var.get() == "自动回复" else "manual",
                     "policy", key)
@@ -810,6 +882,10 @@ class App(tk.Tk):
         self.var_stk.set(bool(cfg.get("stickers", "enabled", default=True)))
         self.var_sticker_ocr.set(bool(
             cfg.get("stickers", "ocr_enabled", default=True)))
+        favorite_cfg = cfg.get("wechat_favorites", default={}) or {}
+        self.var_wechat_favorites.set(bool(favorite_cfg.get("enabled", True)))
+        self.var_wechat_categories.set(format_category_mapping(
+            favorite_cfg.get("categories") or {}))
 
     @staticmethod
     def _int(var, default):

@@ -365,6 +365,23 @@ def test_stickers():
     check("模糊匹配", lib.pick("开心点") is not None)
     check("空库随机兜底", lib.pick("不存在") is not None)
 
+    from app.wechat_favorites import (
+        WeChatFavoriteStickers, format_category_mapping, parse_category_mapping)
+    parsed = parse_category_mapping("开心:0,2；无语:3-5")
+    check("解析微信收藏分类",
+          parsed == {"开心": [0, 2], "无语": [3, 4, 5]})
+    check("格式化微信收藏分类",
+          format_category_mapping(parsed) == "开心:0,2；无语:3,4,5")
+
+    sent = []
+    class FakeNativeWx:
+        def SendEmotion(self, emotion_index=0, who=None):
+            sent.append((emotion_index, who))
+    favorite = WeChatFavoriteStickers(FakeNativeWx())
+    check("优先使用原生表情接口",
+          favorite.send("文件传输助手", "开心", {"开心": [2]}) and
+          sent == [(2, "文件传输助手")])
+
 
 def test_gui():
     try:

@@ -17,6 +17,7 @@ from datetime import datetime
 
 from .config import MAX_MONITORED_CONTACTS, app_dir
 from .prompts import describe_message
+from .wechat_favorites import WeChatFavoriteStickers
 
 logger = logging.getLogger("wxbot")
 
@@ -109,6 +110,7 @@ class WeChatBot:
         self.config = config
         self.ui_queue = ui_queue
         self.wx = None
+        self.favorite_stickers = None
         self.my_name = ""
         self.chats = {}          # {聊天名: None}，作为需要监控的名称集合
         self.engine = None
@@ -157,6 +159,7 @@ class WeChatBot:
             self.log("info", "正在连接微信客户端…")
             self.wx = WeChat(ads=False, resize=bool(
                 self.config.get("window", "resize", default=True)))
+            self.favorite_stickers = WeChatFavoriteStickers(self.wx, self.log)
             # 当前免费版只允许一个 AddListenChat；改由会话列表统一监控。
             try:
                 self.wx.StopListening()
@@ -640,12 +643,18 @@ class WeChatBot:
         sticker_sent = None
         if result.sticker and \
                 self.config.get("stickers", "enabled", default=True):
-            path = engine.stickers.pick(result.sticker)
-            if path:
-                if self._send_file(name, path):
+            favorite_cfg = self.config.get("wechat_favorites", default={}) or {}
+            favorite_categories = favorite_cfg.get("categories") or {}
+            use_favorite = favorite_cfg.get("enabled", True) and (
+                result.sticker == "微信收藏" or result.sticker in favorite_categories)
+            if use_favorite and self._send_favorite_sticker(name, result.sticker):
+                sticker_sent = result.sticker
+            else:
+                path = engine.stickers.pick(result.sticker)
+                if path and self._send_file(name, path):
                     sticker_sent = result.sticker
-            elif not sent_parts:
-                self.log("warn", f"表情包库为空，无法发送（{name}）")
+                elif not sent_parts:
+                    self.log("warn", f"没有可用的表情包（{name}）")
 
         if sent_parts or sticker_sent:
             recorded = "\n".join(sent_parts)
@@ -817,6 +826,32 @@ class WeChatBot:
                 except Exception as e:
                     self.log("error", f"发送表情包失败（{name}）：{e}")
                     return False
+
+    def _send_favorite_sticker(self, name, category):
+        if not self.favorite_stickers:
+            return False
+        favorite_cfg = self.config.get("wechat_favorites", default={}) or {}
+        try:
+            with self._wx_lock:
+                return self.favorite_stickers.send(
+                    name, category,
+                    favorite_cfg.get("categories") or {},
+                    favorite_cfg.get("last_count", 0),
+                )
+        except Exception as e:
+            self.log("warning", f"微信收藏表情发送失败，将改用本地表情：{e}")
+            return False
+
+    def sync_favorite_stickers(self):
+        if not self.favorite_stickers:
+            raise RuntimeError("请先连接微信")
+        cache_dir = os.path.join(app_dir(), "data", "wechat_favorites")
+        with self._wx_lock:
+            report = self.favorite_stickers.sync(cache_dir)
+        count = int(report.get("count") or 0)
+        self.config.set(count, "wechat_favorites", "last_count")
+        self.config.save()
+        return report
 
     # ---------- 供手动处理 ----------
     def open_chat(self, name):
