@@ -1,0 +1,2 @@
+wxauto4==41.1.7
+requests>=2.28
