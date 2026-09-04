@@ -1,0 +1,34 @@
+# Local secrets and private conversation data
+config.json
+history.json
+style_profiles.json
+.env
+.env.*
+
+# Runtime output
+logs/
+wxauto_logs/
+*.log
+*.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Personal sticker images (keep the bundled instructions/placeholders)
+assets/stickers/**/*.jpg
+assets/stickers/**/*.jpeg
+assets/stickers/**/*.png
+assets/stickers/**/*.gif
+assets/stickers/**/*.webp
+assets/stickers/**/*.bmp
+
+# Editors and local launchers
+.idea/
+.vscode/
+*.lnk
+Thumbs.db
+.DS_Store
