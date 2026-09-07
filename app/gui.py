@@ -308,6 +308,7 @@ class App(tk.Tk):
                      variant="primary").pack(fill="x", pady=6)
         self.lst_mon = tk.Listbox(right, font=FONT_S, activestyle="none")
         self.lst_mon.pack(fill="both", expand=True, pady=(2, 4))
+        self.lst_mon.bind("<ButtonRelease-1>", self._show_priority_menu)
         bf = ttk.Frame(right)
         bf.pack(fill="x")
         self._button(bf, text="移除所选", command=self._remove_selected).pack(
@@ -316,7 +317,8 @@ class App(tk.Tk):
                      command=self._clear_history, variant="quiet",
                      width=150).pack(side="left", padx=(8, 0))
         ttk.Label(right, text="提示：先在左侧多选（按住 Ctrl），填好关系再添加。\n"
-                              "「关系」会告诉大模型该用什么语气和分寸。",
+                              "直接点击右侧好友或群聊即可设置优先级；"
+                              "1 最高，未设置者随机。",
                   font=FONT_S, foreground="#777", wraplength=330,
                   justify="left").pack(fill="x", pady=(6, 0))
         self._render_monitored()
@@ -377,6 +379,48 @@ class App(tk.Tk):
         self.config_obj.save()
         self._render_monitored()
 
+    def _show_priority_menu(self, event):
+        """单击已监控对象时，在鼠标处直接选择优先级。"""
+        if not self._mon_names:
+            return
+        index = self.lst_mon.nearest(event.y)
+        bounds = self.lst_mon.bbox(index)
+        if not bounds or not (bounds[1] <= event.y <= bounds[1] + bounds[3]):
+            return
+        self.lst_mon.selection_clear(0, "end")
+        self.lst_mon.selection_set(index)
+        self.lst_mon.activate(index)
+        name = self._mon_names[index]
+        current = self.config_obj.priority_of(name)
+        menu = tk.Menu(self, tearoff=False, font=FONT_S)
+        menu.add_command(label=f"为「{name}」设置回复优先级",
+                         state="disabled")
+        menu.add_separator()
+        for priority in range(1, MAX_MONITORED_CONTACTS + 1):
+            suffix = "（最高）" if priority == 1 else \
+                     "（最低）" if priority == MAX_MONITORED_CONTACTS else ""
+            selected = "  ✓" if current == priority else ""
+            menu.add_command(
+                label=f"{priority} {suffix}{selected}".strip(),
+                command=lambda value=priority: self._apply_contact_priority(name, value))
+        menu.add_separator()
+        menu.add_command(
+            label="未设置（随机）" + ("  ✓" if current is None else ""),
+            command=lambda: self._apply_contact_priority(name, None))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _apply_contact_priority(self, name, priority):
+        if not self.config_obj.set_contact_priority(name, priority):
+            messagebox.showerror("设置失败", "只能为已监控的好友或群聊设置优先级")
+            return
+        self.config_obj.save()
+        self._render_monitored(selected_name=name)
+        value = f"P{priority}" if priority is not None else "随机"
+        self._status(f"已将 {name} 的回复优先级设为 {value}")
+
     def _clear_history(self):
         idxs = self.lst_mon.curselection()
         if not idxs:
@@ -388,13 +432,19 @@ class App(tk.Tk):
                     self.engine.clear_history(self._mon_names[i])
             messagebox.showinfo("完成", "已清空该对象的对话记忆")
 
-    def _render_monitored(self):
+    def _render_monitored(self, selected_name=None):
         self.lst_mon.delete(0, "end")
         self._mon_names = []
         for c in self.config_obj.contacts():
             rel = c.get("relationship") or "朋友"
             self._mon_names.append(c["name"])
-            self.lst_mon.insert("end", f"{c['name']}  （{rel}）")
+            priority = self.config_obj.priority_of(c["name"])
+            ptext = f"P{priority}" if priority is not None else "随机"
+            self.lst_mon.insert("end", f"[{ptext}] {c['name']}  （{rel}）")
+            if c["name"] == selected_name:
+                index = len(self._mon_names) - 1
+                self.lst_mon.selection_set(index)
+                self.lst_mon.activate(index)
 
     # ================= 页签2：大模型 =================
     def _build_tab_model(self):

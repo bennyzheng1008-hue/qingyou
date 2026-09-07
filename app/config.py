@@ -7,7 +7,7 @@ import sys
 import threading
 
 
-MAX_MONITORED_CONTACTS = 5
+MAX_MONITORED_CONTACTS = 7
 
 
 def app_dir() -> str:
@@ -75,7 +75,8 @@ DEFAULTS = {
         "file": "manual",
         "other": "manual",
     },
-    # 监控的聊天对象 [{"name": str, "relationship": str}]
+    # 监控的聊天对象；priority=1 最高，None 表示未设置。
+    # [{"name": str, "relationship": str, "priority": int | None}]
     "contacts": [],
     "window": {
         "resize": True,  # wxauto4 需要拉大微信窗口才能可靠读取消息
@@ -110,8 +111,13 @@ class Config:
                     _deep_merge(self.data, stored or {})
                     contacts = self.data.get("contacts", [])
                     if isinstance(contacts, list):
-                        # 旧配置可能超过限制；运行时只保留前五个，避免高频轮询。
+                        # 兼容旧配置，并清理非法优先级。
                         self.data["contacts"] = contacts[:MAX_MONITORED_CONTACTS]
+                        for contact in self.data["contacts"]:
+                            priority = contact.get("priority")
+                            if not isinstance(priority, int) or not \
+                                    1 <= priority <= MAX_MONITORED_CONTACTS:
+                                contact["priority"] = None
                 except Exception:
                     # 配置损坏时保留默认值，避免启动崩溃
                     pass
@@ -150,6 +156,34 @@ class Config:
                 return c.get("relationship", "") or "朋友"
         return "朋友"
 
+    def priority_of(self, name: str):
+        """返回 1~7 的回复优先级（1 最高）；未设置返回 None。"""
+        for c in self.contacts():
+            if c.get("name") == name:
+                priority = c.get("priority")
+                if isinstance(priority, int) and \
+                        1 <= priority <= MAX_MONITORED_CONTACTS:
+                    return priority
+        return None
+
+    def set_contact_priority(self, name: str, priority=None) -> bool:
+        """只允许为已监控对象设置优先级。"""
+        if priority in (None, ""):
+            normalized = None
+        else:
+            try:
+                normalized = int(priority)
+            except (TypeError, ValueError):
+                return False
+            if not 1 <= normalized <= MAX_MONITORED_CONTACTS:
+                return False
+        with self._lock:
+            for c in self.data.get("contacts", []):
+                if c.get("name") == name:
+                    c["priority"] = normalized
+                    return True
+        return False
+
     def upsert_contact(self, name: str, relationship: str = ""):
         with self._lock:
             for c in self.data["contacts"]:
@@ -160,7 +194,7 @@ class Config:
             if len(self.data["contacts"]) >= MAX_MONITORED_CONTACTS:
                 return False
             self.data["contacts"].append(
-                {"name": name, "relationship": relationship or ""}
+                {"name": name, "relationship": relationship or "", "priority": None}
             )
             return True
 

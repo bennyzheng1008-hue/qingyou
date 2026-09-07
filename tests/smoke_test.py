@@ -38,9 +38,16 @@ def test_config():
         check("联系人去重更新", cfg2.relationship_of("张三") == "老板")
         for i in range(MAX_MONITORED_CONTACTS - 1):
             cfg2.upsert_contact(f"对象{i}")
-        check("监控对象上限为五个",
-              not cfg2.upsert_contact("第六个") and
+        check("监控对象上限为七个",
+              not cfg2.upsert_contact("第八个") and
               len(cfg2.contacts()) == MAX_MONITORED_CONTACTS)
+        check("只能给已监控好友设优先级",
+              cfg2.set_contact_priority("张三", 1) and
+              cfg2.priority_of("张三") == 1 and
+              not cfg2.set_contact_priority("未监控", 2))
+        cfg2.set_contact_priority("张三", None)
+        check("未设置优先级可恢复随机",
+              cfg2.priority_of("张三") is None)
         check("默认策略-视频手动", cfg2.get("policy", "video") == "manual")
         check("默认策略-图片自动", cfg2.get("policy", "image") == "auto")
         check("DeepSeek极速模型",
@@ -211,6 +218,18 @@ def test_split():
     check("一般状态保持快速等待", bot._human_delay_bounds() == (1.0, 2.0))
     cfg.data["reply"]["reply_mode"] = "严谨"
     check("严谨状态延长思考等待", bot._human_delay_bounds() == (3.0, 5.0))
+    cfg.data["contacts"] = [
+        {"name": "高", "relationship": "", "priority": 1},
+        {"name": "低", "relationship": "", "priority": 7},
+        {"name": "随机A", "relationship": "", "priority": None},
+        {"name": "随机B", "relationship": "", "priority": None},
+    ]
+    ordered = sorted(
+        ["随机A", "低", "高", "随机B"],
+        key=lambda n: bot._reply_priority_key(
+            n, {"随机A": .8, "随机B": .2}.get(n, 0)))
+    check("设定优先级在前且未设置者随机排序",
+          ordered == ["高", "低", "随机B", "随机A"], str(ordered))
 
 
 def test_video_cover():

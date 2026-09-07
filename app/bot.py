@@ -7,6 +7,7 @@
 import importlib.util
 import logging
 import os
+import queue
 import random
 import re
 import shutil
@@ -117,6 +118,9 @@ class WeChatBot:
         self._stop_evt = threading.Event()
         self._stop_evt.set()     # start() 前不检查会话
         self._thread = None
+        self._dispatch_thread = None
+        self._reply_queue = queue.PriorityQueue()
+        self._dispatch_seq = 0
         self._buf_lock = threading.Lock()
         self._buffers = {}       # {聊天名: {"items": [(msg, ts)], "last": ts}}
         self._chat_locks = {}
@@ -251,11 +255,22 @@ class WeChatBot:
             raise RuntimeError("尚未连接微信")
         if not self.chats:
             raise RuntimeError("请先添加要监听的聊天对象")
+        if self.running:
+            return
+        # 等待上一次暂停的线程退出，避免快速重启时出现两个调度器。
+        for old_thread in (self._thread, self._dispatch_thread):
+            if old_thread is not None and old_thread.is_alive():
+                old_thread.join(timeout=1.5)
         self._session_claims.clear()
         self._stop_evt.clear()
         # 启动前的未读可能很多。这里只记录当前摘要，不打开任何聊天窗口；
         # 否则会逐个 ChatWith，持续抢占微信主界面，导致用户无法正常操作。
         self._prime_session_baseline()
+        self._reply_queue = queue.PriorityQueue()
+        self._dispatch_seq = 0
+        self._dispatch_thread = threading.Thread(
+            target=self._dispatch_loop, daemon=True, name="reply-dispatcher")
+        self._dispatch_thread.start()
         self._thread = threading.Thread(target=self._loop, daemon=True,
                                         name="wxbot-loop")
         self._thread.start()
@@ -486,10 +501,36 @@ class WeChatBot:
                     items = buf["items"]
                     buf["items"] = []
                     due.append((name, items))
+        # 已设优先级的对象始终在未设置者之前；未设置者随机排队。
+        queued = []
         for name, items in due:
-            t = threading.Thread(target=self._process, args=(name, items),
-                                 daemon=True, name=f"reply-{name}")
-            t.start()
+            self._dispatch_seq += 1
+            key = self._reply_priority_key(name)
+            queued.append((*key, self._dispatch_seq, name, items))
+        # 先放入最高优先级，避免调度线程在整批入队前抢走低优先级。
+        for entry in sorted(queued):
+            self._reply_queue.put(entry)
+
+    def _reply_priority_key(self, name, random_value=None):
+        priority = self.config.priority_of(name)
+        tie_breaker = random.random() if random_value is None else random_value
+        if priority is None:
+            return 1, 0, tie_breaker
+        return 0, priority, tie_breaker
+
+    def _dispatch_loop(self):
+        """单通道调度回复，避免并发生成导致低优先级抢先发送。"""
+        while not self._stop_evt.is_set():
+            try:
+                _bucket, _priority, _random, _seq, name, items = \
+                    self._reply_queue.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            try:
+                if not self._stop_evt.is_set():
+                    self._process(name, items)
+            finally:
+                self._reply_queue.task_done()
 
     def _to_manual(self, name, mtype, content, reason):
         preview = self._preview(mtype, content)
